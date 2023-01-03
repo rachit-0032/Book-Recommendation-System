@@ -1,0 +1,242 @@
+---
+# title: "15072_Rachit_Jain_HW6"
+output: pdf_document
+# date: "2022-11-26"
+header-includes:
+  \usepackage{fvextra}
+  \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+---
+
+# 15.072 Advanced Analytics Edge | HW6
+## Rachit Jain | 959080873 | rachitj
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+```{r}
+## Install necessary libraries.
+library(dplyr)
+library(caret)
+library(ggplot2)
+library(tidyverse)
+library(tm) # Will use to create corpus and modify text therein.
+library(SnowballC) # Will use for "stemming." 
+library(rpart) # Will use to construct a CART model.
+library(rpart.plot) # Will use to plot CART tree.
+library(softImpute) # collaborative filtering package
+```
+
+
+# \underline{Problem 2}
+
+Let us start by reading in the data and getting the song, user and ratings data in necessary datasets. We shall also use the functions provided alongside the problem to help us out.
+
+```{r 1}
+# reading the function file
+source("functionsCF.R")
+
+# data importation
+books <- read.csv("UltimateFinal/Books.csv")
+users <- read.csv("UltimateFinal/Users.csv")
+ratings <- read.csv("UltimateFinal/Ratings.csv")
+
+# look at the files
+head(books)
+head(users)
+head(ratings)
+
+# splitting into a training set and a test set
+set.seed(144)
+training.rows <- cf.training.set(ratings$User, ratings$Item, prop=0.92)
+ratings.train <- ratings[training.rows,]
+ratings.test <- ratings[-training.rows,]
+
+write_csv(ratings.train, "UltimateFinal/ratings_train.csv")
+write_csv(ratings.test, "UltimateFinal/ratings_test.csv")
+
+
+mat.train <- Incomplete(ratings.train[,1], ratings.train[,2], ratings.train[,3])
+
+# scaling the matrix
+set.seed(15071)
+mat.scaled <- biScale(mat.train, maxit=1000, row.scale = FALSE, col.scale = FALSE)
+mat.scaled
+```
+
+
+
+## Part A
+
+Next, we calculate the different metrics for each rank from 0 to 10.
+```{r 2A}
+df_metrics <- cf.evaluate.ranks(ratings.train, ranks = seq(1,10), 0.05)
+ggplot(df_metrics, aes(x=rank, y=r2)) + geom_point()
+df_metrics
+```
+
+From the plot, we can notice that for the number of archetypal users to be 3, the value of $R^2$ comes out the be the highest. Any number of archetypes less than this would be too low to capture the richness of the song preferences, while any number too high would be too many archetypes and thus would lead to overfitting as can be seen by the lower $r^2$ values from the plot. Thus, rank=3 looks like the sweet spot.
+
+
+##ATTENTION
+Intuitively, I would have chosen a somewhat higher number, like rank=7. This is because 3 seems to be too low a number of be able to generalize over all the different types of users that exists in the dataset. Also, there are 7 different song types, thus there could have potentially been one type of user that like a particular style of music. However, as can be seen from the sweet spot, there are much less dimensions that are needed to describe a typical user in general.
+
+```{r 2A2}
+# Genre Types.
+# table(books$genre)
+```
+
+
+## Part B
+
+We are now ready to apply our collaborative filtering algorithm. We use the rank chosen from the above plot, i.e. rank.max=3 and use softImpute to populate the sparse matrix.
+
+```{r 2B1}
+set.seed(15071)
+fit <- softImpute(mat.scaled, rank.max=3, lambda=0, maxit=1000)
+
+# We are now ready to make predictions! We call the function "impute" for this.
+pred.insample.0 <- impute(fit, ratings.train[,1], ratings.train[,2])
+pred.outsample.0 <- impute(fit, ratings.test[,1], ratings.test[,2])
+
+# Let us show the histogram of these values.
+hist(pred.insample.0)
+hist(pred.outsample.0)
+```
+
+The issue is that some values are lower than 1. We see below that in the original dataset, the ratings are only from 1 onwards, only to go till 3.5 at max.
+
+
+```{r 2B2}
+# table(music$rating > 3.5)
+hist(ratings$Rating)
+```
+
+Thus we push all values lower than 1 to be equal to 1 to maintain the similar range of ratings.
+
+```{r 2B3}
+# We simply treat all values lower than 0 as 0's. This is done as follows.
+pred.insample <- pmax(pmin(pred.insample.0, 5), 0)
+pred.outsample <- pmax(pmin(pred.outsample.0, 5), 0)
+
+# Plotting the imputed ratings again.
+hist(pred.insample)
+hist(pred.outsample)
+```
+
+Having done the above steps, we now compute the in-sample and out-of-sample performance of the model!
+
+```{r 2B4}
+R2.insample <- 1 - sum((pred.insample-ratings.train$Rating)^2)/sum((mean(ratings.train$Rating) - ratings.train$Rating)^2)
+R2.outsample <- 1 - sum((pred.outsample-ratings.test$Rating)^2)/sum((mean(ratings.train$Rating) - ratings.test$Rating)^2)
+
+MSE.insample <- mean((pred.insample-ratings.train$Rating)^2)
+MSE.outsample <- mean((pred.outsample-ratings.test$Rating)^2)
+
+MAE.insample <- mean(abs(pred.insample-ratings.train$Rating))
+MAE.outsample <- mean(abs(pred.outsample-ratings.test$Rating))
+
+cat('The in-sample MSE value is: ', MSE.insample)
+cat('The out-of-sample MSE value is: ', MSE.outsample)
+
+cat('The in-sample MAE value is: ', MAE.insample)
+cat('The out-of-sample MAE value is: ', MAE.outsample)
+
+cat('The in-sample R^2 value is: ', R2.insample)
+cat('The out-of-sample R^2 value is: ', R2.outsample)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Part C
+
+```{r 2C1}
+ratings.test[ratings.test$User == 9512,]
+
+cat('The predicted rating from Daisy for Song 131 is: ', impute(fit, 9512, 131))
+cat('The predicted rating from Daisy for Song 156 is: ', impute(fit, 9512, 156))
+```
+
+
+## Part D
+
+We now find out the top 5 songs, based upon the predicted ratings achieved from our model, which were not previously rated by Daisy. We then compare them with those that were rated by Daisy already.
+
+### For User 9512
+```{r 2D1}
+all.books <- 1:nrow(books)
+predictions_9512 <- impute(fit,rep(9512,nrow(books)), all.books)
+
+all_predictions <- data.frame(all.books, predictions_9512, rep(1, nrow(books)))
+colnames(all_predictions) <- c("book_id","rating_prediction","ifPredicted")
+
+books_already_rated <- ratings[ratings$User == 9512,]
+already_rating <- books_already_rated[,'Item']
+
+all_predictions[already_rating,]$rating_prediction = books_already_rated[,'Rating']
+all_predictions[already_rating,]$ifPredicted = 0
+table(all_predictions$ifPredicted)
+```
+
+
+```{r 2D2}
+top10_songs <- all_predictions[order(-all_predictions$rating_prediction), ][seq(1,10),]
+top10_songs
+
+## Showing the necessary content of the top5 songs
+top5_songs_info <- books[top10_songs$book_id,]
+top5_songs_info
+
+write_csv(top5_songs_info, "./UltimateFinal/Recommendations/9512/archetypal_clustering.csv")
+```
+
+### For user 53
+
+```{r 2D1}
+all.books <- 1:nrow(books)
+predictions_53 <- impute(fit,rep(53,nrow(books)), all.books)
+
+all_predictions <- data.frame(all.books, predictions_53, rep(1, nrow(books)))
+colnames(all_predictions) <- c("book_id","rating_prediction","ifPredicted")
+
+books_already_rated <- ratings[ratings$User == 53,]
+already_rating <- books_already_rated[,'Item']
+
+all_predictions[already_rating,]$rating_prediction = books_already_rated[,'Rating']
+all_predictions[already_rating,]$ifPredicted = 0
+table(all_predictions$ifPredicted)
+```
+
+
+
+
+```{r 2D2}
+top10_songs <- all_predictions[order(-all_predictions$rating_prediction), ][seq(1,10),]
+top10_songs
+
+## Showing the necessary content of the top5 songs
+top5_songs_info <- books[top10_songs$book_id,]
+top5_songs_info
+
+write_csv(top5_songs_info, "./UltimateFinal/Recommendations/53/archetypal_clustering.csv")
+```
+
+
+
